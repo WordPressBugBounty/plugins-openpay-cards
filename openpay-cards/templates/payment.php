@@ -106,7 +106,7 @@
     }
 
     .openpay-card-input-cvc {
-        background-image: url('<?php echo $this->images_dir ?>card_cvc.svg') !important;
+        background-image: url('<?php echo $images_dir ?>card_cvc.svg') !important;
         background-repeat: no-repeat;
         background-position: right 0.618em center;
         background-size: 32px 20px;
@@ -131,44 +131,40 @@
 
 </style>
 
-<div id="openpay_cards" style="overflow: hidden; position: relative;">
+<div id="wc_openpay_gateway" style="overflow: hidden; position: relative;">
     <div class="ajax-loader"></div>
     <div>
             <div style="width: 100%;">
-                <?php
-                    $title = ($this->country !== 'PE') ? 'Tarjetas de crédito' : 'Tarjetas de crédito/débito aceptadas'; 
-                ?>
+                <?php $title = ($this->country !== 'PE') ? 'Tarjetas de crédito' : 'Tarjetas de crédito/débito aceptadas'; ?>
                 <h5><?php echo $title; ?></h5>
                 <?php if($this->country == 'MX'): ?>
-                    <?php if($this->merchant_classification != 'eglobal'): ?>
-                        <img alt="" src="<?php echo $this->images_dir ?>credit_cards.png" style="float: left !important;">
-                    <?php else:?>
-                        <img alt="" src="<?php echo $this->images_dir ?>credit_cards_bbva.png" style="float: left !important;">
-                    <?php endif; ?>
+                        <img alt="" src="<?php echo $images_dir ?>credit_cards.png" style="float: left !important;">
                 <?php elseif($this->country == 'CO'): ?>
-                    <img alt="" src="<?php echo $this->images_dir ?>credit_cards_co.png" style="float: left !important;">
+                    <img alt="" src="<?php echo $images_dir ?>credit_cards_co.png" style="float: left !important;">
                 <?php elseif($this->country == 'PE'): ?>
-                    <img alt="" width="200px" src="<?php echo $this->images_dir ?>credit_cards_pe.png" style="float: left !important; margin-bottom: 10px;">
+                    <img alt="" width="200px" src="<?php echo $images_dir ?>credit_cards_pe.png" style="float: left !important; margin-bottom: 10px;">
                 <?php endif; ?>
             </div>
             <div style="width: 100%;">
                 <h5 class="<?php if($this->country == 'PE') echo 'hidden'; ?>">Tarjetas de débito</h5>
                 <?php if($this->country == 'MX'): ?>
-                    <img alt="" src="<?php echo $this->images_dir ?>debit_cards.png">
+                    <img alt="" src="<?php echo $images_dir ?>debit_cards.png">
                 <?php elseif($this->country == 'CO'): ?>
-                    <img alt="" src="<?php echo $this->images_dir ?>debit_cards_co.png" style="float: left !important; margin-bottom: 10px;">
+                    <img alt="" src="<?php echo $images_dir ?>debit_cards_co.png" style="float: left !important; margin-bottom: 10px;">
                 <?php endif; ?>
             </div>
     </div>
     <div style="height: 1px; clear: both; border-bottom: 1px solid #CCC; margin: 10px 0 10px 0;"></div>
 <!--	<span class='payment-errors required'></span>-->
     <h3>Información de Pago</h3>
-    <?php if ($this->is_sandbox): ?>
-        <p><?php echo $this->description ?></p>
+
+    <?php if ($this->sandbox): ?>
+        <p style="margin: 0px 0 15px 0;"><?php echo $this->description ?></p>
     <?php endif; ?>
+
     <div class="form-row form-row-wide">        
-        <select name="openpay_cc" id="openpay_cc" class="openpay-select">
-            <?php foreach($this->cc_options as $cc): ?>
+        <select name="openpay_selected_card" id="openpay_selected_card" class="openpay-select">
+            <?php foreach($savedCardsList as $cc): ?>
                 <option value="<?php echo $cc['value'] ?>"><?php echo $cc['name'] ?></option>
             <?php endforeach; ?>
         </select>
@@ -186,12 +182,6 @@
             <label for="openpay-card-number">Número de tarjeta <span class="required">*</span></label>
             <input id="openpay-card-number" class="input-text wc-credit-card-form-card-number" type="text" maxlength="20" autocomplete="off" placeholder="•••• •••• •••• ••••" data-openpay-card="card_number" />
         </div>
-        <!--
-        <p class="form-row form-row-wide">
-            <label for="openpay-card-number">Número de tarjeta&nbsp;<span class="required">*</span></label>
-            <input id="openpay-card-number" class="input-text wc-credit-card-form-card-number unknown" inputmode="numeric" autocomplete="cc-number" autocorrect="no" autocapitalize="no" spellcheck="no" type="tel" placeholder="•••• •••• •••• ••••" name="openpay-card-number">
-        </p>
-        -->
         <div class="form-row form-row-first openpay-card-expiry">
             <label for="openpay-card-expiry">Expira (MM/AA) <span class="required">*</span></label>
             <input id="openpay-card-expiry" class="input-text wc-credit-card-form-card-expiry" type="text" autocomplete="off" placeholder="MM / AA" data-openpay-card="expiration_year" />
@@ -203,9 +193,9 @@
         <div class="form-row form-row-wide save_cc <?php echo !$this->can_save_cc ? 'hidden' : '' ?>" style="margin-bottom: 20px;">
             <label for="save_cc" class="label">
                 <div class="tooltip">
-                <input type="checkbox" name="save_cc" id="save_cc" />
+                <input type="checkbox" name="openpay_save_card_auth" id="openpay_save_card_auth" />
                 <span style="font-weight: 600;">Guardar tarjeta</span>
-                <img  style=" float: none; display:unset; max-height: 1em;" alt="" src="<?php echo $this->images_dir ?>tooltip_symbol.svg">
+                <img  style=" float: none; display:unset; max-height: 1em;" alt="" src="<?php echo $images_dir ?>tooltip_symbol.svg">
                 <span class="tooltiptext" >Al guardar los datos de tu tarjeta agilizarás tus pagos futuros y podrás usarla como método de pago guardado.</span>
                 </div>
             </label>
@@ -213,58 +203,60 @@
         <!--
         </fieldset>
         -->
-    </div>    
-        
-    <?php if($this->show_months_interest_free): ?>
-        <div class="form-row form-row-wide" style="display: none;">
-            <label for="openpay-card-number">Pago a meses sin intereses <span class="required">*</span></label>
-            <select name="openpay_month_interest_free" id="openpay_month_interest_free" class="openpay-select">
-                <option value="1">Pago de contado</option>
-                <?php foreach($this->months as $key => $month): ?>
-                    <option value="<?php echo $key ?>"><?php echo $month ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>    
-        <div id="total-monthly-payment" class="form-row form-row-wide hidden">
-            <label>Estarías pagando mensualmente</label>
-            <p class="openpay-total"><span id="monthly-payment"></span></p>
-            <div style="display: none"><?php echo WC()->cart->total?></div>
-        </div>
-    <?php endif; ?>
-        
-    <?php if($this->show_installments): ?>
-        <div class="form-row form-row-wide" style="display: none;">
-            <label for="openpay-card-number">Cuotas <span class="required">*</span></label>
-            <select name="openpay_installments" id="openpay_installments" class="openpay-select">
-                <option value="1">Sola una cuota</option>
-                <?php foreach($this->installments as $key => $installments): ?>
-                    <option value="<?php echo $key ?>"><?php echo $installments ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>            
+    </div>
+
+    <?php if($installments): ?>
+
+            <?php if($this->country == 'MX'): ?>
+                <div class="form-row form-row-wide" style="display: none;">
+                    <label for="openpay-card-number">Pago a meses sin intereses <span class="required">*</span></label>
+                    <select name="openpay_month_interest_free" id="openpay_month_interest_free" class="openpay-select">
+                        <option value="1">Pago de contado</option>
+                        <?php foreach($installments["payments"] as $key => $installments): ?>
+                            <option value="<?php echo $installments ?>"><?php echo $installments ?> Meses sin intereses</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div id="total-monthly-payment" class="form-row form-row-wide hidden">
+                    <label>Estarías pagando mensualmente</label>
+                    <p class="openpay-total"><span id="monthly-payment"></span></p>
+                    <div style="display: none"><?php echo WC()->cart->total?></div>
+                </div>
+            <?php endif; ?>
+
+            <?php if($this->country == 'CO'): ?>
+                <div class="form-row form-row-wide" style="display: none;">
+                    <label for="openpay-card-number">Cuotas <span class="required">*</span></label>
+                    <select name="openpay_installments" id="openpay_installments" class="openpay-select">
+                        <option value="1">Sola una cuota</option>
+                        <?php foreach($installments["payments"] as $key => $installments): ?>
+                            <option value="<?php echo $key ?>"><?php echo $installments ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            <?php endif; ?>
+
+            <?php if($this->country == 'PE'): ?>
+            <div class="form-row form-row-wide" style="display: none;">
+                <label id="installments_title" for="openpay-card-number">Cuotas<span class="required">*</span></label>
+                <select name="openpay_installments_pe" id="openpay_installments_pe" class="openpay-select">
+                </select>
+                <input type="hidden" name="openpay_has_interest_pe" id="openpay_has_interest_pe"/>
+            </div>
+        <?php endif; ?>
+
     <?php endif; ?>
 
-    <?php if($this->show_installments_pe): ?>
-        <div class="form-row form-row-wide" style="display: none;">
-            <label id="installments_title" for="openpay-card-number">Cuotas<span class="required">*</span></label>
-            <select name="openpay_installments_pe" id="openpay_installments_pe" class="openpay-select">
-            </select>
-            <input type="hidden" name="withInterest" id="withInterest"/>
-        </div>            
-    <?php endif; ?>
         
     <input type="hidden" name="device_session_id" id="device_session_id" />
-    <input type="hidden" name="use_card_points" id="use_card_points" value="false" />
+    <input type="hidden" name="openpay_card_points_confirm" id="openpay_card_points_confirm" value="false" />
 </div>
+
 <div style="height: 1px; clear: both; border-bottom: 1px solid #CCC; margin: 10px 0 10px 0;"></div>
 <div style="text-align: center">
-    <?php if($this->merchant_classification != 'eglobal'): ?>
         <img class="openpay_logo" alt="" width="80px" src="https://img.openpay.mx/plugins/openpay_logo.svg">
         <div style="display: flex; margin: 15px 0;">
-            <img  style="float: none; display:unset;max-height: 3em;" alt="" src="<?php echo $this->images_dir ?>security_symbol.svg">
+            <img  style="float: none; display:unset;max-height: 3em;" alt="" src="<?php echo $images_dir ?>security_symbol.svg">
             <p style="font-size: 13px; text-align: left; margin-left: 5px;">Tus pagos se realizan de forma segura con encriptación de 256 bits</p>
         </div>
-    <?php else: ?>
-        <img alt="" src="<?php echo $this->images_dir ?>bbva.png">
-    <?php endif; ?>
 </div>

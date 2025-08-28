@@ -1,40 +1,50 @@
 <?php
-use Automattic\WooCommerce\Internal\DataStores\Orders\CustomOrdersTableController;
 /**
- * Plugin Name: Openpay Cards Plugin
- * Plugin URI: http://www.openpay.mx/docs/plugins/woocommerce.html
- * Description: Provides a credit card payment method with Openpay for WooCommerce.
- * Version: 2.9.7
- * Author: Openpay
- * Author URI: http://www.openpay.mx
- * Developer: Openpay
- * Text Domain: openpay-cards
- *
- * WC requires at least: 3.0
- * WC tested up to: 8.5.2
- *
- * License: GNU General Public License v3.0
- * License URI: http://www.gnu.org/licenses/gpl-3.0.html
- * 
- * Openpay Docs: http://www.openpay.mx/docs/
+* Plugin Name: Openpay Cards Plugin
+* Plugin URI: http://www.openpay.mx/docs/plugins/woocommerce.html
+* Description: Provides a credit card payment method with Openpay for WooCommerce.
+* Version: 3.0.0
+* Author: Openpay
+* Author URI: http://www.openpay.mx
+* Developer: Openpay
+* Text Domain: openpay-cards
+*
+* WC requires at least: 3.0
+* WC tested up to: 9.2.3
+*
+* License: GNU General Public License v3.0
+* License URI: http://www.gnu.org/licenses/gpl-3.0.html
+* 
+* Openpay Docs: http://www.openpay.mx/docs/
+*/
+
+ /*
+ * This action hook registers WC_Openpay_Gateway class as a WooCommerce payment gateway
  */
+add_filter( 'woocommerce_payment_gateways', 'openpay_add_gateway_class' );
 
-function openpay_cards_init_your_gateway() {
-    if (class_exists('WC_Payment_Gateway')) {
-        require_once('openpay_cards_gateway.php');
-    }
-    if(!class_exists('Utils')) {
-        require_once("utils/utils.php");
-    }
-}
+use Automattic\WooCommerce\Internal\DataStores\Orders\CustomOrdersTableController;
+use Openpay\Resources\OpenpayCard;
+use OpenpayCards\Includes\OpenpayClient;
 
-add_action('plugins_loaded', 'openpay_cards_init_your_gateway', 0);
-add_action('template_redirect', 'wc_custom_redirect_after_purchase', 0);
-add_action('woocommerce_order_refunded', 'openpay_woocommerce_order_refunded', 10, 2);        
-add_action('woocommerce_order_status_changed','openpay_woocommerce_order_status_change_custom', 10, 3);
-add_action('woocommerce_api_openpay_confirm', 'openpay_woocommerce_confirm', 10, 0);
-// Partial capture.
-add_action('woocommerce_order_item_add_action_buttons','add_partial_capture_toggle', 10, 1 );
+/*
+ * WC_Openpay_Gateway Class file is called by openpay_init_gateway function
+ */
+add_action( 'plugins_loaded', 'openpay_init_gateway' );
+/*
+ * This action registers WC_Openpay_Gateway_Blocks_Support class as a WC Payment Block
+ */
+add_action( 'woocommerce_blocks_loaded', 'openpay_blocks_support' );
+/*
+ * 
+ */
+add_action( 'before_woocommerce_init', 'openpay_checkout_blocks_compatibility' );
+
+add_action('admin_enqueue_scripts', 'openpay_cards_admin_enqueue');
+
+add_action('woocommerce_order_refunded', 'openpay_woocommerce_order_refunded', 10, 2);
+
+add_filter( 'plugin_action_links_' . plugin_basename(__FILE__), 'openpay_settings_link' );
 
 // Hook para usuarios no logueados
 add_action('wp_ajax_nopriv_get_type_card_openpay', 'get_type_card_openpay');
@@ -42,318 +52,131 @@ add_action('wp_ajax_nopriv_get_type_card_openpay', 'get_type_card_openpay');
 // Hook para usuarios logueados
 add_action('wp_ajax_get_type_card_openpay', 'get_type_card_openpay');
 
-add_action('admin_enqueue_scripts','admin_enqueue_scripts_order' );
+add_action('woocommerce_order_status_changed','openpay_woocommerce_order_status_change_custom', 10, 3);
+
+add_action('woocommerce_order_item_add_action_buttons','add_partial_capture_toggle', 10, 1 );
+
 add_action('wp_ajax_wc_openpay_admin_order_capture','ajax_capture_handler');
 
-add_action('woocommerce_before_thankyou', 'confirm_card_saved_notice');
-add_action('woocommerce_before_thankyou', 'order_confirmation_notice');
-add_action( 'before_woocommerce_init', function() {
-    if ( class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
-        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', __FILE__, true );
-    }
-} );
-add_filter( 'woocommerce_thankyou_order_received_text', 'order_confirmation_text_remove', 10, 2 );
+/*3DS FUNCTION*/
+add_action('woocommerce_api_openpay_confirm', 'openpay_woocommerce_confirm', 10, 0);
+add_action('template_redirect', 'wc_custom_redirect_after_purchase',0);
 
-function confirm_card_saved_notice($order_id){
+function openpay_woocommerce_confirm()
+{
+    global $woocommerce;
     $logger = wc_get_logger();
-    $order = wc_get_order( $order_id );
-    $cardSavedFlag = $order->get_meta('_openpay_card_saved_flag');
-    $logger->info('confirm_card_saved_notice : ' . $cardSavedFlag);
-    if ($cardSavedFlag){
-        wc_print_notice('Tu tarjeta ha sido registrada exitosamente', 'success', $data = []);
-    }
-}
 
-function order_confirmation_notice($order_id){
-    $order = new WC_Order($order_id);
-    if ($order->get_status() === "processing"){
-        wc_print_notice('Tu pedido fue procesado con éxito', 'success', $data = []);
-    }
-}
+    $id = $_GET['id'];
 
-function order_confirmation_text_remove( $text, $order ){
-    return null;
-}
+    $logger->info('openpay_woocommerce_confirm => ' . $id);
 
-function openpay_woocommerce_confirm() {   
-        global $woocommerce;
-        $logger = wc_get_logger();
-        
-        $id = $_GET['id'];        
-        
-        $logger->info('openpay_woocommerce_confirm => '.$id);   
-        
-        try {            
-            $openpay_cards = new Openpay_Cards();    
-            $openpay = $openpay_cards->getOpenpayInstance();
-            $charge = $openpay->charges->get($id);
-            $order = new WC_Order($charge->order_id);
-            
-            $logger->info('openpay_woocommerce_confirm => '.json_encode(array('id' => $charge->id, 'status' => $charge->status)));   
+    try {
+        $openpay_cards = new WC_Openpay_Gateway();
+        $openpay = OpenpayClient::getOpenpayInstance($openpay_cards->sandbox, $openpay_cards->merchant_id, $openpay_cards->private_key, $openpay_cards->country);
+        $charge = $openpay->charges->get($id);
+        $order = new WC_Order($charge->order_id);
+        $logger->info('[WC_Openpay_3d_secure.openpay_woocommerce_confirm] => openpay_woocommerce_confirm => ' . json_encode($order));
+        $logger->info('[WC_Openpay_3d_secure.openpay_woocommerce_confirm] => openpay_woocommerce_confirm => ' . json_encode(array('id' => $charge->id, 'status' => $charge->status)));
 
-            if ($order && $charge->status != 'completed') {
-                if (property_exists($charge, 'authorization') && ($charge->status == 'in_progress' && ($charge->id != $charge->authorization))) {
-                    $order->set_status('on-hold');
-                    $order->save();
+        if ($order && $charge->status != 'completed') {
+            if (property_exists($charge, 'authorization') && ($charge->status == 'in_progress' && ($charge->id != $charge->authorization))) {
+                $order->set_status('on-hold');
+                $order->save();
+            } else {
+                $order->add_order_note(sprintf(" %s - Pago Fallido.  : '%s'", 'Openpay Cards', 'Status ' . $charge->status));
+                $order->set_status('failed');
+                $order->save();
+
+                if (function_exists('wc_add_notice')) {
+                    wc_add_notice(__('Error en la transacción: No se pudo completar tu pago.'), 'error');
                 } else {
-                    $order->add_order_note(sprintf("%s Credit Card Payment Failed with message: '%s'", 'Openpay_Cards', 'Status '.$charge->status));
-                    $order->set_status('failed');
-                    $order->save();
-
-                    if (function_exists('wc_add_notice')) {
-                        wc_add_notice(__('Error en la transacción: No se pudo completar tu pago.'), 'error');
-                    } else {
-                        $woocommerce->add_error(__('Error en la transacción: No se pudo completar tu pago.'), 'woothemes');
-                    }
+                    $woocommerce->add_error(__('Error en la transacción: No se pudo completar tu pago.'), 'woothemes');
                 }
-            } else if ($order && $charge->status == 'completed') {
-                $order->payment_complete();
-                $woocommerce->cart->empty_cart();
-                $order->add_order_note(sprintf("%s payment completed with Transaction Id of '%s'", 'Openpay_Cards', $charge->id));
             }
-                        
-            wp_redirect($openpay_cards->get_return_url($order));            
-        } catch (Exception $e) {
-            $logger->error($e->getMessage());            
-            status_header( 404 );
-            nocache_headers();
-            include(get_query_template('404'));
-            die();
-        }                
-    }    
+        } else if ($order && $charge->status == 'completed') {
+            $order->payment_complete();
+            $woocommerce->cart->empty_cart();
+            $order->add_order_note(sprintf("%s - Pago Completado: Transaction Id: '%s'", 'Openpay_Cards', $charge->id));
+        }
 
+        wp_redirect($openpay_cards->get_return_url($order));
+    } catch (Exception $e) {
+        $logger->error('[WC_Openpay_3d_secure.openpay_woocommerce_confirm] => error'.$e->getMessage());
+        status_header(404);
+        nocache_headers();
+        include(get_query_template('404'));
+        die();
+    }
+}
 function wc_custom_redirect_after_purchase() {
     global $wp;
     $logger = wc_get_logger();
     if (is_checkout() && !empty($wp->query_vars['order-received'])) {
         $order = new WC_Order($wp->query_vars['order-received']);
         $redirect_url = $order->get_meta('_openpay_3d_secure_url');
-        $logger->debug('wc_custom_redirect_after_purchase ');
-        $logger->debug('3DS_redirect_url : ' .  $redirect_url);
-        $logger->debug('order_status : ' .  $order->get_status());
+        $logger->debug('[WC_Openpay_3d_secure.wc_custom_redirect_after_purchase] => wc_custom_redirect_after_purchase ');
+        $logger->debug('[WC_Openpay_3d_secure.wc_custom_redirect_after_purchase] => 3DS_redirect_url : ' .  $redirect_url);
+        $logger->debug('[WC_Openpay_3d_secure.wc_custom_redirect_after_purchase] => order_status : ' .  $order->get_status());
 
         if ($redirect_url && $order->get_status() != 'processing') {
             $order->delete_meta_data('_openpay_3d_secure_url');
             $order->save();
-            $logger->debug('order not processed redirect_url : ' . $redirect_url);
+            $logger->debug('[WC_Openpay_3d_secure.wc_custom_redirect_after_purchase] => order not processed redirect_url : ' . $redirect_url);
             wp_redirect($redirect_url);
             exit();
         }
     }
 }
+/*3DS FUNCTION END*/
 
-/**
- * Realiza el reembolso de la orden en Openpay
- * 
- * @param type $order_id
- * @param type $refund_id
- * 
- * @link https://docs.woocommerce.com/wc-apidocs/source-function-wc_create_refund.html#587
- */
-function openpay_woocommerce_order_refunded($order_id, $refund_id) { 
-    $logger = wc_get_logger();                
-    $logger->info('ORDER: '.$order_id);             
-    $logger->info('REFUND: '.$refund_id); 
-    
-    $order  = wc_get_order($order_id);
-    $refund = wc_get_order($refund_id);
-    
-    if ($order->get_payment_method() != 'openpay_cards') {
-        $logger->info('get_payment_method: '.$order->get_payment_method());             
-        return;
-    }
 
-    $openpay_cards = new Openpay_Cards();
-    if(!strcmp($openpay_cards->settings['sandbox'], 'yes')){
-        $customer_id = $order->get_meta('_openpay_customer_sandbox_id');
-    } else {
-        $customer_id = $order->get_meta('_openpay_customer_id');
-    }
-    $transaction_id = $order->get_meta('_transaction_id');
-        
-    if (!strlen($customer_id)) {
-        return;
-    }
+add_action('plugins_loaded', function () {
+    \OpenpayCards\Includes\OpenpayErrorHandler::init();
+});
 
-    $reason = $refund->get_reason() ? $refund->get_reason() : 'Refund ID: '.$refund_id;
-    $amount = floatval($refund->get_amount());
-    //$amount = $order->get_total_refunded();
+//Hooks para llamar servicio 3Dsecure
+//add_action('woocommerce_api_openpay_confirm', 'openpay_woocommerce_confirm', 10, 0);
+//add_action('template_redirect', 'wc_custom_redirect_after_purchase',0);
 
-    $logger->info('_openpay_customer_id: '.$customer_id);             
-    $logger->info('_transaction_id: '.$transaction_id);             
-
-    try {
-        if($openpay_cards->settings['country'] == 'CO'){
-            $order->add_order_note('Openpay plugin does not support refunds');             
-            return;
-        }
-        $openpay = $openpay_cards->getOpenpayInstance();
-        $customer = $openpay->customers->get($customer_id);
-        $charge = $customer->charges->get($transaction_id);
-        $charge->refund(array(
-            'description' => $reason,
-            'amount' => $amount                
-        ));
-        $order->add_order_note('Payment was also refunded in Openpay');
-    } catch (Exception $e) {
-        $logger->error($e->getMessage());             
-        $order->add_order_note('There was an error refunding charge in Openpay: '.$e->getMessage());
-    }        
-
-    return;
+// Agrega un enlace de Ajustes del plugin
+function openpay_settings_link ( $links ) {
+    $settings_link = '<a href="' . admin_url('admin.php?page=wc-settings&tab=checkout&section=wc_openpay_gateway' ). '">' . __('Ajustes', 'openpay-cards') . '</a>';
+    array_push( $links, $settings_link );
+    return $links;
 }
 
-function openpay_woocommerce_order_status_change_custom($order_id, $old_status, $new_status)
-{
-    $order = wc_get_order( $order_id );
-    // Execute only if there are not a partial capture yet
-    if ($order->get_meta('_captured_total') == null) {
-        $logger = wc_get_logger();
-        $logger->info('openpay_woocommerce_order_status_change_custom');
-        $logger->info('$old_status: ' . $old_status);
-        $logger->info('$new_status: ' . $new_status);
-
-        $order = wc_get_order($order_id);
-        if ($order->get_payment_method() != 'openpay_cards') {
-            $logger->info('get_payment_method: ' . $order->get_payment_method());
-            return;
-        }
-
-        $expected_new_status = array('completed', 'processing');
-        $transaction_id = $order->get_meta('_transaction_id');
-        $capture = $order->get_meta('_openpay_capture');
-        $logger->info('$capture: ' . $capture);
-
-        if ($capture == 'false' && $old_status == 'on-hold' && in_array($new_status, $expected_new_status)) {
-            try {
-                $openpay_cards = new Openpay_Cards();
-                $openpay = $openpay_cards->getOpenpayInstance();
-                $settings = $openpay_cards->init_settings();
-
-                if (strcmp($settings['sandbox'], 'yes')) {
-                    $customer_id = $order->get_meta('_openpay_customer_sandbox_id');
-                } else {
-                    $customer_id = $order->get_meta('_openpay_customer_id');
-                }
-
-                $customer = $openpay->customers->get($customer_id);
-                $charge = $customer->charges->get($transaction_id);
-                $charge->capture(array(
-                    'amount' => floatval($order->get_total())
-                ));
-                $order->add_order_note('Payment was captured in Openpay');
-            } catch (Exception $e) {
-                $logger->error($e->getMessage());
-                $order->add_order_note('There was an error with Openpay plugin: ' . $e->getMessage());
-            }
-        }
-    }
-    // Update the total order with the total captured value
-    else{
-        $order->set_total($order->get_meta('_captured_total'));
-        $order->save();
-    }
+function openpay_add_gateway_class( $gateways ) {
+	$gateways[] = 'WC_Openpay_Gateway'; // Gateway Class Name
+	return $gateways;
 }
 
-function get_type_card_openpay(){
-    
-    global $woocommerce;
-
-    $logger     = wc_get_logger();
-    $card_bin   = isset( $_POST['card_bin'] ) ? $_POST['card_bin'] : false;
-
-    if($card_bin) {
-        try {
-
-            $openpay_cards  = new Openpay_Cards();
-            $country        = $openpay_cards->settings['country'];
-            $is_sandbox     = strcmp($openpay_cards->settings['sandbox'], 'yes') == 0;
-            $merchant_id    = $is_sandbox === true ? $openpay_cards->settings['test_merchant_id'] : $openpay_cards->settings['live_merchant_id'];
-            $auth           = $is_sandbox === true ? $openpay_cards->settings['test_private_key'] : $openpay_cards->settings['live_private_key'];
-            $amount         = $woocommerce->cart->total;
-            $currency       = get_woocommerce_currency();
-
-            switch ($country) {
-
-                case 'MX':
-                    $path       = sprintf('/%s/bines/man/%s', $merchant_id, $card_bin);
-                    $cardInfo = Utils::requestOpenpay($path, $country, $is_sandbox,null,null,$auth);
-                    
-                    wp_send_json(array(
-                        'status'    => 'success',
-                        'card_type' => $cardInfo->type
-                    ));
-
-                break;
-
-                case 'PE':
-
-                    $path       = sprintf('/%s/bines/%s/promotions', $merchant_id, $card_bin);
-                    $params     = array('amount' => $amount, 'currency' => $currency);
-                    $cardInfo    = Utils::requestOpenpay($path, $country, $is_sandbox);
-
-                    wp_send_json(array(
-                        'status'        => 'success',
-                        'card_type' => $cardInfo->cardType,
-                        'installments'  => $cardInfo->installments,
-                        'withInterest' => $cardInfo->withInterest
-                    ));
-
-                break;
-
-                default:
-                    $path       = sprintf('/cards/validate-bin?bin=%s', $card_bin);
-                    $cardInfo = Utils::requestOpenpay($path, $country, $is_sandbox);
-                    wp_send_json(array(
-                        'status' => 'success',
-                        'card_type' => $cardInfo->card_type
-                    ));
-
-                break;
-
-            }
-
-        } catch (Exception $e) {
-            $logger->error($e->getMessage());
-        }
+function openpay_init_gateway() {
+    if (class_exists('WC_Payment_Gateway')) {
+        require_once('class-wc-openpay-gateway.php');
     }
-    wp_send_json(array(
-        'status' => 'error',
-        'card_type' => "credit card not found"
-    ));
+	if(!class_exists('WC_Openpay_Refund_Service')) {
+    	require_once(dirname(__FILE__) . "/Services/class-wc-openpay-refund-service.php");
+	}
+	if(!class_exists('WC_Openpay_Capture_Service')) {
+    	require_once(dirname(__FILE__) . "/Services/class-wc-openpay-capture-service.php");
+	}
+	/*if(!class_exists('Openpay3dSecure')) {
+    	require_once(dirname(__FILE__) . "/Services/PaymentSettings/Openpay3dSecure.php");
+	}*/
 }
 
-function add_partial_capture_toggle( $order ) {
-    $openpay_cards = new Openpay_Cards();
-    if ($openpay_cards->is_preauthorized_order($order)){
-
-        $auth_total       = $openpay_cards->get_order_auth_amount( $order );
-        $auth_remaining   = $openpay_cards->get_order_auth_remaining( $order );
-        $already_captured = $openpay_cards->get_order_captured_total( $order );
-
-        if ( $auth_remaining < 1 ) {
-            return;
-        }
-
-        include( plugin_dir_path( __FILE__ ) . 'templates/partial-capture.php' );
-    }
-}
-
-function admin_enqueue_scripts_order( $hook ) {
-    global $post, $post_type;
+function openpay_cards_admin_enqueue($hook) {
+	global $post, $post_type;
     $order_id = ! empty( $post ) ? $post->ID : false;
 
-    // Check if High performance Order Storage is enable
-    $screen_id = wc_get_container()->get( CustomOrdersTableController::class )->custom_orders_table_usage_is_enabled()
+	$screen_id = wc_get_container()->get( CustomOrdersTableController::class )->custom_orders_table_usage_is_enabled()
         ? wc_get_page_screen_id( 'shop-order' )
         : 'shop_order';
 
-    // Get Order ID if High performance Order Storage is enable
-    if ($screen_id === 'woocommerce_page_wc-orders' )  {
-        $order_id = wc_get_order() ? wc_get_order()->get_id() : 'false';
-    }
+	wp_enqueue_script('openpay_cards_admin_form', plugins_url('assets/js/admin.js', __FILE__), array('jquery'), '1.0.2' , true);
 
-    if ( ($order_id && 'shop_order' === $post_type && 'post.php' === $hook) || ($order_id && $screen_id === 'woocommerce_page_wc-orders') ) {
+	 if ( ($order_id && 'shop_order' === $post_type && 'post.php' === $hook) || ($order_id && $screen_id === 'woocommerce_page_wc-orders') ) {
         $order = wc_get_order( $order_id );
 
         wp_enqueue_script(
@@ -379,45 +202,68 @@ function admin_enqueue_scripts_order( $hook ) {
     }
 }
 
-function ajax_capture_handler() {
-    $order_id = $_POST['order_id'];
-    $amount   = isset( $_POST['amount'] ) ? $_POST['amount'] : 0;
+function openpay_blocks_support() {
+	require_once __DIR__ . '/Includes/class-wc-openpay-gateway-blocks-support.php';
 
-    try {
-        check_ajax_referer( 'wc_openpay_admin_order_capture-' . $order_id, 'capture_nonce' );
-        $order = wc_get_order( $order_id );
-        // Capture.
-        $openpay_cards = new Openpay_Cards();
-        $openpay = $openpay_cards->getOpenpayInstance();
-        $settings = $openpay_cards->init_settings();
-        $transaction_id = $order->get_meta('_transaction_id');
-        if(strcmp($settings['sandbox'], 'yes')){
-            $customer_id = $order->get_meta('_openpay_customer_sandbox_id');
-        }else{
-            $customer_id = $order->get_meta('_openpay_customer_id');
-        }
-
-        $customer = $openpay->customers->get($customer_id);
-        $charge = $customer->charges->get($transaction_id);
-        $charge->capture(array(
-            'amount' => floatval($amount)
-        ));
-
-        // Actualizar valor de Captura total en los metadatos de la orden
-        $order->update_meta_data( '_captured_total', $amount );
-        $order->set_total($amount);
-        $order->payment_complete();
-        $order->save();
-
-        $order->add_order_note('Payment was captured in Openpay');
-
-        if ( $charge ) {
-            wp_send_json_success();
-        } else {
-            throw new Exception( 'Capture not successful.' );
-        }
-    } catch ( Exception $e ) {
-        wp_send_json_error( array( 'error' => $e->getMessage() ) );
-    }
-    wp_die();
+	add_action(
+		'woocommerce_blocks_payment_method_type_registration',
+		function( Automattic\WooCommerce\Blocks\Payments\PaymentMethodRegistry $payment_method_registry ) {
+			$payment_method_registry->register( new WC_Openpay_Gateway_Blocks_Support );
+		}
+	);
 }
+
+function openpay_checkout_blocks_compatibility() {
+
+    if( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
+        \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+				'cart_checkout_blocks',
+				__FILE__,
+				true // true (compatible, default) or false (not compatible)
+			);
+    }
+		
+}
+
+function openpay_woocommerce_order_refunded($order_id, $refund_id) {
+		$openpay_gateway = new WC_Openpay_Gateway();
+		$openpayInstance = $openpay_gateway->getOpenpayInstance();
+        $refund_service = new WC_Openpay_Refund_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
+		$refund_service->refundOrder($order_id, $refund_id);
+}
+
+
+function get_type_card_openpay() {
+	if(!class_exists('WC_Openpay_Bines_Consult')) {
+    	require_once(dirname(__FILE__) . "/Includes/class-wc-openpay-bines-consult.php");
+	}
+
+	$openpayBinesConsult = new WC_Openpay_Bines_Consult();
+	$openpayBinesConsult->getTypeCardOpenpay();
+}
+
+function openpay_woocommerce_order_status_change_custom($order_id, $old_status, $new_status) {
+	$openpay_gateway = new WC_Openpay_Gateway();
+	$openpayInstance = $openpay_gateway->getOpenpayInstance();
+    $capture_service = new WC_Openpay_Capture_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
+	$capture_service->openpayWoocommerceOrderStatusChangeCustom( $order_id, $old_status, $new_status );
+}
+
+function add_partial_capture_toggle( $order ) {
+	$openpay_gateway = new WC_Openpay_Gateway();
+	$openpayInstance = $openpay_gateway->getOpenpayInstance();
+    $capture_service = new WC_Openpay_Capture_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
+	$capture_service->addPartialCaptureToggle( $order );
+}
+
+function ajax_capture_handler() {
+	$openpay_gateway = new WC_Openpay_Gateway();
+	$openpayInstance = $openpay_gateway->getOpenpayInstance();
+    $capture_service = new WC_Openpay_Capture_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
+	$capture_service->ajaxCaptureHandler();
+}
+
+/*function openpay_woocommerce_confirm() {
+	$openpay3dSecure = new Openpay3dSecure();
+	$openpay3dSecure->openpay_woocommerce_confirm();
+}*/
