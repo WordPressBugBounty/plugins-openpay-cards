@@ -18,7 +18,6 @@ const CardCvcValidation = openpayCardCvc => {
     return 'El campo de CVV se encuentra vacío';
   }
   if (openpayCardCvc.length < 3) {
-    console.log(openpayCardCvc.length);
     return 'Número de digitos de CVV incorrectos';
   }
 
@@ -425,7 +424,6 @@ __webpack_require__.r(__webpack_exports__);
 const saveCardAuthComponent = props => {
   const saveCardAuthValidation = e => {
     props.setOpenpaySaveCardAuth(!props.openpaySaveCardAuth);
-    console.log(props.openpaySaveCardAuth);
   };
   return /*#__PURE__*/(0,react_jsx_runtime__WEBPACK_IMPORTED_MODULE_0__.jsx)("div", {
     className: "wc-block-components-checkbox",
