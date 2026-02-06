@@ -40,7 +40,10 @@ Class OpenpayInstallments extends WC_Openpay_Gateway{
     }
 
     public function getInstallments(){
-       return $this->processInstallments();
+       if(is_checkout()){
+           return $this->processInstallments();
+       }
+       return false;
     }
 
     public function dataValidationAssignement(&$charge_request,$openpay_payment_plan, $openpay_has_interest_pe){
