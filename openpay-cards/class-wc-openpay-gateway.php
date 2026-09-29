@@ -6,6 +6,7 @@ use OpenpayCards\Includes\OpenpayClient;
 use OpenpayCards\Services\OpenpayCustomerService;
 use OpenpayCards\Services\OpenpayChargeService;
 use OpenpayCards\Services\OpenpayCardService;
+use OpenpayCards\Services\OpenpayWebhookService;
 use OpenpayCards\Services\PaymentSettings\OpenpayInstallments;
 use OpenpayCards\Services\PaymentSettings\OpenpayPaymentSettingsValidation;
 use OpenpayCards\Services\PaymentSettings\Openpay3dSecure;
@@ -40,6 +41,7 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
     protected $card_points;
     protected $msi;
     protected $iva = 0;
+    protected $impoconsumo;
     protected $installments_is_active;
     protected $minimum_amount_interest_free;
     protected $transactionErrorMessage = null;
@@ -72,13 +74,14 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
         $this->logger = wc_get_logger();
         $this->country = $this->get_option('country');
 
-        // Disable Plugin if Currency is not supported by Country.
+        // Disable at runtime if Currency is not supported by Country.
         $allowedCurrencies = OpenpayPaymentSettingsValidation::getCurrencies($this->country);
-        if (!in_array(get_woocommerce_currency(), $allowedCurrencies)) {
-            $this->update_option('enabled', '0');
-        }
+        $isCurrencySupported = in_array(get_woocommerce_currency(), $allowedCurrencies, true);
 
         $this->enabled = $this->get_option('enabled');
+        if (!$isCurrencySupported) {
+            $this->enabled = 'no';
+        }
         $this->sandbox = 'yes' === $this->get_option('sandbox');
         $this->merchant_id = $this->sandbox ? $this->get_option('test_merchant_id') : $this->get_option('live_merchant_id');
         $this->private_key = $this->sandbox ? $this->get_option('test_private_key') : $this->get_option('live_private_key');
@@ -86,6 +89,7 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
         $this->card_points = 'yes' === $this->get_option('card_points');
         $this->msi = $this->get_option('msi');
         $this->iva = $this->country == 'CO' ? $this->get_option('iva') : 0;
+        $this->impoconsumo = $this->country == 'CO' ? $this->get_option('impoconsumo') : 0;
         $this->installments_is_active = 'yes' === $this->get_option('installments_is_active');
         $this->minimum_amount_interest_free = $this->get_option('minimum_amount_interest_free');
         $this->charge_type = $this->country == 'MX' ? $this->get_option('charge_type') : $this->get_option('charge_type_co_pe');
@@ -166,7 +170,7 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
                 'default' => __('', 'woothemes')
             ),
             'live_private_key' => array(
-                'type' => 'text',
+                'type' => 'password',
                 'title' => __('Llave secreta de producción', 'woothemes'),
                 'description' => __('Obten tus llaves de producción de tu cuenta de Openpay ("sk_").', 'woothemes'),
                 'default' => __('', 'woothemes')
@@ -184,7 +188,7 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
                 'default' => __('', 'woothemes')
             ),
             'test_private_key' => array(
-                'type' => 'text',
+                'type' => 'password',
                 'title' => __('Llave secreta de pruebas', 'woothemes'),
                 'description' => __('Obten tus llaves de prueba de tu cuenta de Openpay ("sk_").', 'woothemes'),
                 'default' => __('', 'woothemes')
@@ -268,11 +272,29 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
                 'default' => 'no'
             ),
             'iva' => array(
-                'type' => 'number',
+                'type' => 'checkbox',
                 'required' => true,
                 'title' => __('IVA', 'woothemes'),
+                'label' => __('Habilitar', 'woothemes'),
+                'description' => __('Habilitar campo de IVA', 'woocommerce'),
+                'desc_tip' => true,
                 'default' => '0',
-                'id' => 'openpay_show_iva',
+            ),
+            'impoconsumo' => array(
+                'type' => 'checkbox',
+                'required' => true,
+                'title' => __('Impoconsumo', 'woothemes'),
+                'label' => __('Habilitar', 'woothemes'),
+                'default' => 'no',
+                'id' => 'openpay_show_impoconsumo',
+            ),
+            'propina' => array(
+                'type' => 'checkbox',
+                'required' => true,
+                'title' => __('Propina', 'woothemes'),
+                'label' => __('Habilitar', 'woothemes'),
+                'default' => 'no',
+                'id' => 'openpay_show_propina',
             ),
             // Monto minimo para meses sin intereses solo MX
             'minimum_amount_interest_free' => array(
@@ -345,6 +367,7 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
             'country' => $this->country,
             'installments' => $OpenpayInstallments->getInstallments(),
             'ajaxurl' => admin_url('admin-ajax.php'),
+            'bin_nonce' => wp_create_nonce('openpay_bin_lookup'),
             'save_cc_option' => $this->save_card_mode,
             'use_card_points' => $this->card_points
         );
@@ -358,7 +381,8 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
     public function validate_fields()
     {
 
-        $this->logger->debug('validate_fields - ' . json_encode($_POST));
+        $sanitized_post = $this->sanitize_post_for_log(wp_unslash($_POST));
+        $this->logger->debug('validate_fields - ' . wp_json_encode($sanitized_post));
         if (empty($_POST['openpay_token'] || $_POST['openpay_selected_card'])) {
             wc_add_notice('Openpay token missing', 'error');
             return false;
@@ -415,7 +439,7 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
 
         $this->logger->info("[WC_Openpay_Gateway.process_payment] => openpay_payment_plan " . json_encode($openpay_payment_plan));
 
-        $this->logger->info('[WC_Openpay_Gateway.process_payment] => openpay_tokenized_card ' . json_encode($openpay_tokenized_card));
+        $this->logger->info('[WC_Openpay_Gateway.process_payment] => openpay_tokenized_card ' . wp_json_encode($this->mask_card_number_for_log($openpay_tokenized_card)));
 
         // we need it to get any order detailes
         $this->order = new WC_Order($order_id);
@@ -453,7 +477,8 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
             'sandbox' => $this->sandbox,
             'openpay_has_interest_pe' => $openpay_has_interest_pe,
             'country' => $this->country,
-            'iva' => $this->iva
+            'iva' => $this->iva,
+            'impoconsumo' => $this->impoconsumo
         );
 
         $this->logger->info("[WC_Openpay_Gateway.process_payment] => Payment Settings " . json_encode($payment_settings));
@@ -553,12 +578,117 @@ class WC_Openpay_Gateway extends WC_Payment_Gateway
         $this->logger->info("[WC_Openpay_Gateway.cvvValidation end]");
     }
 
+    /**
+     * Sanitizes posted checkout data before writing it to logs.
+     *
+     * @param mixed $post_data Raw posted data.
+     * @return mixed Sanitized data preserving original structure.
+     */
+    private function sanitize_post_for_log($post_data)
+    {
+        if (!is_array($post_data)) {
+            return $post_data;
+        }
+
+        $sanitized = [];
+
+        foreach ($post_data as $key => $value) {
+            $sanitized[$key] = $this->sanitize_field_for_log($key, $value);
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Sanitizes a single field value based on its key.
+     *
+     * @param string|int $key   Field key.
+     * @param mixed      $value Field value.
+     * @return mixed Sanitized field value.
+     */
+    private function sanitize_field_for_log($key, $value)
+    {
+        if (is_array($value)) {
+            $sanitized_array = [];
+            foreach ($value as $nested_key => $nested_value) {
+                $sanitized_array[$nested_key] = $this->sanitize_field_for_log($nested_key, $nested_value);
+            }
+            return $sanitized_array;
+        }
+
+        $normalized_key = sanitize_key((string) $key);
+        $cvv_keys = ['openpay_card_cvc', 'openpay-card-cvc', 'cvv', 'cvv2', 'cvc'];
+        $card_number_keys = ['openpay-card-number', 'openpay_card_number', 'openpay_tokenized_card', 'card_number', 'credit_card_number', 'cc_number'];
+
+        if (in_array($normalized_key, $cvv_keys, true)) {
+            return $this->mask_cvv_for_log($value);
+        }
+
+        if (in_array($normalized_key, $card_number_keys, true)) {
+            return $this->mask_card_number_for_log($value);
+        }
+
+        return $value;
+    }
+
+    /**
+     * Masks CVV value for logging.
+     *
+     * @param mixed $cvv CVV value.
+     * @return string Masked CVV.
+     */
+    private function mask_cvv_for_log($cvv)
+    {
+        $cvv_string = trim((string) $cvv);
+        if ($cvv_string === '') {
+            return '';
+        }
+
+        return str_repeat('*', strlen($cvv_string));
+    }
+
+    /**
+     * Masks card number-like values for logging.
+     *
+     * Keeps only the first 4 characters and masks the rest.
+     *
+     * @param mixed $card_number Card number-like value.
+     * @return string Masked card value.
+     */
+    private function mask_card_number_for_log($card_number)
+    {
+        $card_string = trim((string) $card_number);
+        if ($card_string === '') {
+            return '';
+        }
+
+        $card_compact = preg_replace('/[^0-9A-Za-z]/', '', $card_string);
+        if ($card_compact === '') {
+            return $card_string;
+        }
+
+        $visible = substr($card_compact, 0, 4);
+        $masked_length = max(strlen($card_compact) - 4, 0);
+
+        return $visible . str_repeat('*', $masked_length);
+    }
+
     public function process_admin_options()
     {
         parent::process_admin_options();
+        $settings = get_option('woocommerce_' . $this->id . '_settings', []);
+        if (is_array($settings) && ($settings['country'] ?? '') !== 'CO') {
+            $settings['impoconsumo'] = 'no';
+            $settings['propina'] = 'no';
+            update_option('woocommerce_' . $this->id . '_settings', $settings);
+            $this->settings = $settings;
+        }
         $settingsValidation = new OpenpayPaymentSettingsValidation();
         $settingsValidation->validateOpenpayCredentials();
         $settingsValidation->validateOpenpayCurrencies();
+        
+        $gateway_with_fresh_settings = new self();
+        OpenpayWebhookService::register_webhook_if_needed($gateway_with_fresh_settings);
     }
 
     public function getOpenpayInstance()

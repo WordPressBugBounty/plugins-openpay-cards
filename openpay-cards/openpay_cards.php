@@ -3,14 +3,14 @@
  * Plugin Name: Openpay Cards Plugin
  * Plugin URI: http://www.openpay.mx/docs/plugins/woocommerce.html
  * Description: Provides a credit card payment method with Openpay for WooCommerce.
- * Version: 3.0.4
+ * Version: 3.2.0
  * Author: Openpay
  * Author URI: http://www.openpay.mx
  * Developer: Openpay
  * Text Domain: openpay-cards
  *
  * WC requires at least: 3.0
- * WC tested up to: 9.2.3
+ * WC tested up to: 11.0.1
  *
  * License: GNU General Public License v3.0
  * License URI: http://www.gnu.org/licenses/gpl-3.0.html
@@ -20,6 +20,7 @@
 use Automattic\WooCommerce\Internal\DataStores\Orders\CustomOrdersTableController;
 use Openpay\Resources\OpenpayCard;
 use OpenpayCards\Includes\OpenpayClient;
+use OpenpayCards\Services\OpenpayWebhookService;
 
 /*
  * This action hook registers WC_Openpay_Gateway class as a WooCommerce payment gateway
@@ -65,7 +66,14 @@ add_action('before_woocommerce_init', function () {
 
 /*3DS FUNCTION*/
 add_action('woocommerce_api_openpay_confirm', 'openpay_woocommerce_confirm', 10, 0);
+add_action('woocommerce_api_openpay_cards', 'openpay_woocommerce_webhook', 10, 0);
 add_action('template_redirect', 'wc_custom_redirect_after_purchase', 0);
+
+/*Campo de IVA personalizado*/
+// Mostrar el campo personalizado en la pestaña "General" bajo los precios
+add_action('woocommerce_product_options_pricing', 'mostrar_IVA_producto');
+// Guardar el valor del campo cuando se actualiza el producto
+add_action('woocommerce_process_product_meta', 'guardar_IVA_producto');
 
 function openpay_woocommerce_confirm()
 {
@@ -109,7 +117,7 @@ function openpay_woocommerce_confirm()
             $logger->info('[WC_Openpay_3d_secure.openpay_woocommerce_confirm] => set_status => payment_complete');
         }
 
-        wp_redirect($openpay_cards->get_return_url($order));
+        wp_safe_redirect($openpay_cards->get_return_url($order));
     } catch (Exception $e) {
         $logger->error('[WC_Openpay_3d_secure.openpay_woocommerce_confirm] => error' . $e->getMessage());
         status_header(404);
@@ -119,6 +127,12 @@ function openpay_woocommerce_confirm()
     }
     $logger->info('[WC_Openpay_3d_secure.openpay_woocommerce_confirm] => end');
 }
+
+function openpay_woocommerce_webhook()
+{
+    OpenpayWebhookService::listener();
+}
+
 function wc_custom_redirect_after_purchase()
 {
     global $woocommerce;
@@ -172,11 +186,26 @@ function openpay_init_gateway()
     if (class_exists('WC_Payment_Gateway')) {
         require_once('class-wc-openpay-gateway.php');
     }
+    if (!class_exists('\OpenpayCards\Includes\OpenpayImpoconsumo')) {
+        require_once(dirname(__FILE__) . '/Includes/OpenpayImpoconsumo.php');
+    }
+
+    \OpenpayCards\Includes\OpenpayImpoconsumo::init();
+
+    if (!class_exists('\OpenpayCards\Includes\OpenpayPropina')) {
+        require_once(dirname(__FILE__) . '/Includes/OpenpayPropina.php');
+    }
+
+    \OpenpayCards\Includes\OpenpayPropina::init();
+
     if (!class_exists('WC_Openpay_Refund_Service')) {
         require_once(dirname(__FILE__) . "/Services/class-wc-openpay-refund-service.php");
     }
     if (!class_exists('WC_Openpay_Capture_Service')) {
         require_once(dirname(__FILE__) . "/Services/class-wc-openpay-capture-service.php");
+    }
+    if (!class_exists('\OpenpayCards\Services\OpenpayWebhookService')) {
+        require_once(dirname(__FILE__) . "/Services/OpenpayWebhookService.php");
     }
     /*if(!class_exists('Openpay3dSecure')) {
         require_once(dirname(__FILE__) . "/Services/PaymentSettings/Openpay3dSecure.php");
@@ -263,6 +292,8 @@ function openpay_woocommerce_order_refunded($order_id, $refund_id)
 
 function get_type_card_openpay()
 {
+    openpay_validate_bin_ajax_request();
+
     $logger = wc_get_logger();
     $logger->info('[openpay_cards.get_type_card_openpay] => start');
     if (!class_exists('WC_Openpay_Bines_Consult')) {
@@ -274,20 +305,55 @@ function get_type_card_openpay()
     $logger->info('[openpay_cards.get_type_card_openpay] => end');
 }
 
+/**
+ * Validates BIN lookup AJAX requests.
+ *
+ * Enforces POST-only access and validates the nonce generated with
+ * wp_create_nonce('openpay_bin_lookup') before processing card BIN data.
+ *
+ * @return void Sends JSON error response and exits when validation fails.
+ */
+function openpay_validate_bin_ajax_request()
+{
+    $logger = wc_get_logger();
+
+    if ('POST' !== ($_SERVER['REQUEST_METHOD'] ?? '')) {
+        $logger->error('[openpay_cards.openpay_validate_bin_ajax_request] => invalid request method');
+        wp_send_json(array(
+            'status' => 'error',
+            'card_type' => 'invalid request method'
+        ), 405);
+    }
+
+    $valid_nonce = check_ajax_referer('openpay_bin_lookup', 'security', false);
+    if (!$valid_nonce) {
+        $logger->error('[openpay_cards.openpay_validate_bin_ajax_request] => invalid nonce');
+        wp_send_json(array(
+            'status' => 'error',
+            'card_type' => 'invalid nonce'
+        ), 403);
+    }
+}
+
 function openpay_woocommerce_order_status_change_custom($order_id, $old_status, $new_status)
 {
-    global $woocommerce;
-    $gateways = $woocommerce->payment_gateways->payment_gateways();
-    $gateway = $gateways['wc_openpay_gateway'];
-    if ($gateway->enabled === 'yes') {
-        $logger = wc_get_logger();
-        $logger->info('[openpay_cards.openpay_woocommerce_order_status_change_custom] => start');
-        $openpay_gateway = new WC_Openpay_Gateway();
-        $openpayInstance = $openpay_gateway->getOpenpayInstance();
-        $capture_service = new WC_Openpay_Capture_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
-        $capture_service->openpayWoocommerceOrderStatusChangeCustom($order_id, $old_status, $new_status);
-        $logger->info('[openpay_cards.openpay_woocommerce_order_status_change_custom] => end');
+    $order = wc_get_order($order_id);
+    if (!$order || $order->get_payment_method() !== 'wc_openpay_gateway') {
+        return;
     }
+
+    $gateways = WC()->payment_gateways()->payment_gateways();
+    $openpay_gateway = isset($gateways['wc_openpay_gateway']) ? $gateways['wc_openpay_gateway'] : null;
+    if (!$openpay_gateway || $openpay_gateway->enabled !== 'yes') {
+        return;
+    }
+
+    $logger = wc_get_logger();
+    $logger->info('[openpay_cards.openpay_woocommerce_order_status_change_custom] => start');
+    $openpayInstance = $openpay_gateway->getOpenpayInstance();
+    $capture_service = new WC_Openpay_Capture_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
+    $capture_service->openpayWoocommerceOrderStatusChangeCustom($order_id, $old_status, $new_status);
+    $logger->info('[openpay_cards.openpay_woocommerce_order_status_change_custom] => end');
 }
 
 function add_partial_capture_toggle($order)
@@ -310,4 +376,76 @@ function ajax_capture_handler()
     $capture_service = new WC_Openpay_Capture_Service($openpay_gateway->settings['sandbox'], $openpay_gateway->settings['country'], $openpayInstance);
     $capture_service->ajaxCaptureHandler();
     $logger->info('[openpay_cards.ajax_capture_handler] => end');
+}
+
+function mostrar_IVA_producto()
+{
+    $openpay_gateway = new WC_Openpay_Gateway();
+    $pasarelas_activas = WC()->payment_gateways->get_available_payment_gateways();
+    if (isset($pasarelas_activas['wc_openpay_gateway'])) {
+        if ($openpay_gateway->settings['country'] == "CO" && $openpay_gateway->settings['iva'] == "yes") {
+            // Genera un campo de texto con el formato nativo de WooCommerce
+            woocommerce_wp_text_input(array(
+                'id' => 'openpay_taxes_iva', // El ID que usaremos en la base de datos
+                'label' => __('IVA', 'woocommerce'), // Nombre visible
+                'placeholder' => 'Ej. 100.00',
+                'desc_tip' => 'true',
+                'description' => __('Ingresa el monto del IVA.', 'woocommerce')
+            ));
+        }
+    }
+}
+
+function guardar_IVA_producto($post_id)
+{
+    // Verificamos si el campo fue enviado
+    if (isset($_POST['openpay_taxes_iva'])) {
+        // Sanitizamos y guardamos el valor
+        $valor = sanitize_text_field($_POST['openpay_taxes_iva']);
+        update_post_meta($post_id, 'openpay_taxes_iva', $valor);
+    }
+}
+
+// Lo añadimos tanto a la página del carrito como a la del checkout
+add_action('woocommerce_cart_totals_before_order_total', 'mostrar_iva_checkout');
+add_action('woocommerce_review_order_before_order_total', 'mostrar_iva_checkout');
+
+function mostrar_iva_checkout()
+{
+
+    $settings = get_option('woocommerce_wc_openpay_gateway_settings', []);
+
+    if (
+        !is_array($settings)
+        || ($settings['country'] ?? '') !== 'CO'
+        || ($settings['iva'] ?? 'no') !== 'yes'
+    ) {
+        return;
+    }
+
+    $iva_total = 0;
+
+    // Recorremos el carrito
+    foreach (WC()->cart->get_cart() as $cart_item) {
+        $product_id = $cart_item['product_id'];
+        $cantidad = $cart_item['quantity'];
+
+        $valor = get_post_meta($product_id, 'openpay_taxes_iva', true);
+
+        if (is_numeric($valor)) {
+            $iva_total += ((float) $valor * $cantidad);
+        }
+    }
+
+    // Dibujamos el renglón si hay un valor que mostrar
+    if ($iva_total > 0) {
+        ?>
+                <tr class="iva">
+                    <th><?php _e('IVA total', 'woocommerce'); ?></th>
+                    <td data-title="<?php esc_attr_e('IVA', 'woocommerce'); ?>">
+                        <?php echo wc_price($iva_total); ?>
+                    </td>
+                </tr>
+                <?php
+    }
 }
